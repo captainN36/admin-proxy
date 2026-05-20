@@ -1,0 +1,202 @@
+name: SSH make deploy (via-marketplace)
+description: Pull refs on the server, then run make from infra with ENV=dev|staging|production.
+
+inputs:
+  host:
+    description: SSH host
+    required: true
+  username:
+    description: SSH username
+    required: true
+  password:
+    description: Optional SSH password
+    required: false
+    default: ""
+  key:
+    description: Optional SSH private key
+    required: false
+    default: ""
+  port:
+    description: SSH port
+    required: false
+    default: "22"
+  source_dir:
+    description: Absolute path to the app checkout on the server (e.g. admin repo)
+    required: true
+  infra_dir:
+    description: Infra directory path, absolute or relative to source_dir parent
+    required: false
+    default: infra
+  git_ref:
+    description: Branch, tag, or ref to deploy for source_dir
+    required: true
+  infra_git_ref:
+    description: Branch or tag for infra checkout when infra_dir is a separate git repo
+    required: false
+    default: ""
+  infra_env:
+    description: Makefile ENV (dev, staging, production)
+    required: false
+    default: dev
+  build_target:
+    description: Make target for docker compose build
+    required: false
+    default: build
+  build_args:
+    description: Optional compose service name(s) for build (Makefile SERVICE=)
+    required: false
+    default: ""
+  deploy_target:
+    description: Make target for deploy (e.g. up-nobuild)
+    required: true
+  deploy_args:
+    description: Optional ARGS for compose up (e.g. admin)
+    required: false
+    default: ""
+  migration_target:
+    description: Optional Make target after deploy
+    required: false
+    default: ""
+  seed_target:
+    description: Optional Make target after migrate
+    required: false
+    default: ""
+  deploy_env_prefix:
+    description: Prefix for exported INFRA_* variables
+    required: false
+    default: DEV
+
+runs:
+  using: composite
+  steps:
+    - uses: appleboy/ssh-action@v1.2.0
+      with:
+        host: ${{ inputs.host }}
+        username: ${{ inputs.username }}
+        password: ${{ inputs.password }}
+        key: ${{ inputs.key }}
+        port: ${{ inputs.port }}
+        script_stop: true
+        script: |
+          set -euo pipefail
+
+          SOURCE_DIR="${{ inputs.source_dir }}"
+          INFRA_DIR="${{ inputs.infra_dir }}"
+          GIT_REF="${{ inputs.git_ref }}"
+          INFRA_GIT_REF="${{ inputs.infra_git_ref }}"
+          INFRA_ENV="${{ inputs.infra_env }}"
+          BUILD_TARGET="${{ inputs.build_target }}"
+          BUILD_ARGS="${{ inputs.build_args }}"
+          DEPLOY_TARGET="${{ inputs.deploy_target }}"
+          DEPLOY_ARGS="${{ inputs.deploy_args }}"
+          MIGRATION_TARGET="${{ inputs.migration_target }}"
+          SEED_TARGET="${{ inputs.seed_target }}"
+          PFX="${{ inputs.deploy_env_prefix }}"
+
+          test -n "$SOURCE_DIR"
+          test -n "$INFRA_DIR"
+          test -n "$GIT_REF"
+          test -n "$DEPLOY_TARGET"
+
+          echo "Pulling $GIT_REF in $SOURCE_DIR"
+          cd "$SOURCE_DIR"
+          git fetch origin --prune
+          git fetch origin --tags
+          if git show-ref --verify --quiet "refs/remotes/origin/${GIT_REF}"; then
+            git checkout "$GIT_REF"
+            git reset --hard "origin/$GIT_REF"
+          elif git ls-remote --exit-code origin "refs/tags/$GIT_REF" >/dev/null 2>&1; then
+            git fetch origin "refs/tags/$GIT_REF:refs/tags/$GIT_REF" 2>/dev/null || true
+            git checkout "$GIT_REF"
+          else
+            git checkout "$GIT_REF"
+          fi
+
+          if [ "${INFRA_DIR#/}" != "$INFRA_DIR" ]; then
+            INFRA_PATH="$INFRA_DIR"
+          else
+            INFRA_PATH="$(dirname "$SOURCE_DIR")/$INFRA_DIR"
+            if [ ! -d "$INFRA_PATH" ]; then
+              INFRA_PATH="$SOURCE_DIR/$INFRA_DIR"
+            fi
+          fi
+
+          if [ -d "$INFRA_PATH/.git" ]; then
+            cd "$INFRA_PATH"
+            git fetch origin --prune
+            git fetch origin --tags
+
+            if [ -z "$INFRA_GIT_REF" ]; then
+              INFRA_GIT_REF="$(git rev-parse --abbrev-ref HEAD)"
+              if [ "$INFRA_GIT_REF" = "HEAD" ]; then
+                INFRA_GIT_REF="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD | sed 's#^origin/##')"
+              fi
+            fi
+
+            echo "Pulling $INFRA_GIT_REF in $INFRA_PATH"
+            if git show-ref --verify --quiet "refs/remotes/origin/${INFRA_GIT_REF}"; then
+              git checkout "$INFRA_GIT_REF"
+              git reset --hard "origin/$INFRA_GIT_REF"
+            elif git ls-remote --exit-code origin "refs/tags/$INFRA_GIT_REF" >/dev/null 2>&1; then
+              git fetch origin "refs/tags/$INFRA_GIT_REF:refs/tags/$INFRA_GIT_REF" 2>/dev/null || true
+              git checkout "$INFRA_GIT_REF"
+            else
+              DEFAULT_REF="$(git remote show origin 2>/dev/null | sed -n '/HEAD branch/s/.*: //p')"
+              DEFAULT_REF="${DEFAULT_REF:-main}"
+              echo "Infra ref ${INFRA_GIT_REF} not found; using origin/${DEFAULT_REF}"
+              INFRA_GIT_REF="$DEFAULT_REF"
+              git checkout "$INFRA_GIT_REF"
+              git reset --hard "origin/$INFRA_GIT_REF"
+            fi
+          fi
+
+          export ENV="$INFRA_ENV"
+          export "${PFX}_INFRA_ROOT=$INFRA_PATH"
+          export "${PFX}_GIT_REF=$GIT_REF"
+
+          cd "$INFRA_PATH"
+
+          echo "Building (ENV=$ENV) with make $BUILD_TARGET"
+          if [ -n "$BUILD_ARGS" ]; then
+            make "$BUILD_TARGET" ENV="$ENV" SERVICE="$BUILD_ARGS" || {
+              echo "--- docker compose build failed (SERVICE=$BUILD_ARGS) ---"
+              docker compose --env-file "environments/${ENV}/compose.env" build "$BUILD_ARGS" 2>&1 | tail -80
+              exit 1
+            }
+          else
+            make "$BUILD_TARGET" ENV="$ENV" || {
+              echo "--- docker compose build failed ---"
+              docker compose --env-file "environments/${ENV}/compose.env" build 2>&1 | tail -80
+              exit 1
+            }
+          fi
+
+          echo "Deploying (ENV=$ENV) with make $DEPLOY_TARGET"
+          deploy_make() {
+            if [ -n "$DEPLOY_ARGS" ]; then
+              make "$DEPLOY_TARGET" ENV="$ENV" ARGS="$DEPLOY_ARGS"
+            else
+              make "$DEPLOY_TARGET" ENV="$ENV"
+            fi
+          }
+          if [ "$DEPLOY_TARGET" = "up-nobuild" ] && ! make -qp 2>/dev/null | grep -q '^up-nobuild:'; then
+            echo "Makefile has no up-nobuild; using docker compose up -d --no-build"
+            set -a && . "./environments/${ENV}/compose.env" && set +a
+            if [ -n "$DEPLOY_ARGS" ]; then
+              docker compose --env-file "environments/${ENV}/compose.env" up -d --no-build $DEPLOY_ARGS
+            else
+              docker compose --env-file "environments/${ENV}/compose.env" up -d --no-build
+            fi
+          else
+            deploy_make || exit 1
+          fi
+
+          if [ -n "$MIGRATION_TARGET" ]; then
+            echo "Running $MIGRATION_TARGET (ENV=$ENV)"
+            make "$MIGRATION_TARGET" ENV="$ENV"
+          fi
+
+          if [ -n "$SEED_TARGET" ]; then
+            echo "Running $SEED_TARGET (ENV=$ENV)"
+            make "$SEED_TARGET" ENV="$ENV"
+          fi

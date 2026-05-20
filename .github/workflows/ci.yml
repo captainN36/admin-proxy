@@ -1,0 +1,175 @@
+# lint -> SSH pull (admin + infra) -> make build SERVICE=admin -> up-nobuild admin -> Telegram
+# Infra repo branch: main (DEV_INFRA_GIT_REF). API must already be running for admin login.
+
+name: CI/CD — admin
+
+run-name: admin · ${{ github.ref_name }} · ${{ github.event_name }}
+
+on:
+  pull_request:
+    branches: [develop, main]
+    paths-ignore:
+      - "README.md"
+  push:
+    branches: [develop, main]
+    paths-ignore:
+      - "README.md"
+  workflow_dispatch:
+    inputs:
+      target:
+        type: choice
+        options:
+          - develop
+          - production
+        default: develop
+      git_ref:
+        required: true
+        default: develop
+      run_deploy:
+        type: boolean
+        default: true
+  repository_dispatch:
+    types: [admin-develop, admin-production]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  lint-develop:
+    name: lint (develop)
+    if: >
+      github.event_name == 'push' ||
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'repository_dispatch' && github.event.action == 'admin-develop') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'develop')
+    runs-on: ubuntu-latest
+    env:
+      GIT_REF: ${{ github.event.inputs.git_ref || github.event.client_payload.ref || github.head_ref || github.ref_name || 'develop' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.GIT_REF }}
+      - uses: ./.github/actions/ci
+
+  ssh-deploy-develop:
+    name: ssh deploy DEV
+    if: >
+      needs.lint-develop.result == 'success' &&
+      github.event_name != 'pull_request' &&
+      (github.event_name == 'push' ||
+        (github.event_name == 'repository_dispatch' && github.event.action == 'admin-develop') ||
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.run_deploy && github.event.inputs.target == 'develop')) &&
+      (vars.DEV_SOURCE_DIR != '' || vars.DEV_REMOTE_REPO_PATH != '')
+    needs: [lint-develop]
+    runs-on: ubuntu-latest
+    env:
+      GIT_REF: ${{ github.event.inputs.git_ref || github.event.client_payload.ref || github.head_ref || github.ref_name || 'develop' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.GIT_REF }}
+      - uses: ./.github/actions/ssh-make-deploy
+        with:
+          host: ${{ secrets.DEV_SSH_HOST }}
+          username: ${{ secrets.DEV_SSH_USER }}
+          password: ${{ secrets.DEV_SSH_PASSWORD }}
+          key: ${{ secrets.DEV_SSH_PRIVATE_KEY }}
+          port: ${{ vars.DEV_SSH_PORT || '22' }}
+          source_dir: ${{ vars.DEV_SOURCE_DIR || vars.DEV_REMOTE_REPO_PATH }}
+          infra_dir: ${{ vars.DEV_INFRA_DIR || '../infra' }}
+          git_ref: ${{ env.GIT_REF }}
+          infra_git_ref: ${{ vars.DEV_INFRA_GIT_REF || 'main' }}
+          infra_env: dev
+          build_target: ${{ vars.DEV_BUILD_TARGET || 'build' }}
+          build_args: ${{ vars.DEV_BUILD_ARGS || 'admin' }}
+          deploy_target: ${{ vars.DEV_DEPLOY_TARGET || 'up-nobuild' }}
+          deploy_args: ${{ vars.DEV_DEPLOY_ARGS || 'admin' }}
+          deploy_env_prefix: DEV
+      - name: Notify Telegram (DEV)
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then exit 0; fi
+          text="via-marketplace admin DEV deploy: ${JOB_STATUS}
+          ref: ${GIT_REF}
+          run: ${RUN_URL}"
+          curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${text}"
+
+  validate-production:
+    name: validate ref (production)
+    if: >
+      (github.event_name == 'repository_dispatch' && github.event.action == 'admin-production') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'production')
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          R="${{ github.event.inputs.git_ref || github.event.client_payload.ref }}"
+          test -n "$R" || (echo "::error::Set git_ref" && exit 1)
+
+  lint-production:
+    name: lint (production)
+    needs: [validate-production]
+    if: >
+      needs.validate-production.result == 'success' &&
+      ((github.event_name == 'repository_dispatch' && github.event.action == 'admin-production') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'production'))
+    runs-on: ubuntu-latest
+    env:
+      GIT_REF: ${{ github.event.inputs.git_ref || github.event.client_payload.ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.GIT_REF }}
+      - uses: ./.github/actions/ci
+
+  ssh-deploy-production:
+    name: ssh deploy PROD
+    if: >
+      needs.lint-production.result == 'success' &&
+      (vars.PROD_SOURCE_DIR != '' || vars.PROD_REMOTE_REPO_PATH != '')
+    needs: [lint-production]
+    runs-on: ubuntu-latest
+    env:
+      GIT_REF: ${{ github.event.inputs.git_ref || github.event.client_payload.ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.GIT_REF }}
+      - uses: ./.github/actions/ssh-make-deploy
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          password: ${{ secrets.PROD_SSH_PASSWORD }}
+          key: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          port: ${{ vars.PROD_SSH_PORT || '22' }}
+          source_dir: ${{ vars.PROD_SOURCE_DIR || vars.PROD_REMOTE_REPO_PATH }}
+          infra_dir: ${{ vars.PROD_INFRA_DIR || '../infra' }}
+          git_ref: ${{ env.GIT_REF }}
+          infra_git_ref: ${{ vars.PROD_INFRA_GIT_REF || 'main' }}
+          infra_env: production
+          build_target: ${{ vars.PROD_BUILD_TARGET || 'build' }}
+          build_args: ${{ vars.PROD_BUILD_ARGS || 'admin' }}
+          deploy_target: ${{ vars.PROD_DEPLOY_TARGET || 'up-nobuild' }}
+          deploy_args: ${{ vars.PROD_DEPLOY_ARGS || 'admin' }}
+          deploy_env_prefix: PROD
+      - name: Notify Telegram (PROD)
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then exit 0; fi
+          text="via-marketplace admin PROD deploy: ${JOB_STATUS}
+          ref: ${GIT_REF}
+          run: ${RUN_URL}"
+          curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${text}"
