@@ -16,9 +16,11 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# Defaults match infra/environments/dev/admin.env when compose build args are omitted.
+# Browser: admin :9082, API :3010. Server-side calls use API_URL below (compose network).
 ARG NEXT_PUBLIC_APP_SLUG=via-marketplace-admin
 ARG NEXT_PUBLIC_APP_NAME=Via Marketplace Admin
-ARG NEXT_PUBLIC_API_URL=http://api-via-marketplace.huy.lat
+ARG NEXT_PUBLIC_API_URL=http://localhost:3010
 ARG NEXT_PUBLIC_BASE_PATH=
 
 ENV NEXT_PUBLIC_APP_SLUG=${NEXT_PUBLIC_APP_SLUG}
@@ -33,6 +35,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+# Server-side API from the admin container (not NEXT_PUBLIC_API_URL).
 ENV API_URL=http://api:3000
 
 RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs

@@ -29,12 +29,12 @@
 
 Requires `up-nobuild` in infra `Makefile` on branch `main`. First full stack: `cd infra && make up-dev`.
 
-## URLs (dev, nginx port 9081)
+## URLs (dev)
 
 | App | URL |
 |-----|-----|
-| Admin UI | `http://admin-via-marketplace.huy.lat:9081` |
-| API (login) | `http://api-via-marketplace.huy.lat:9081/admin/auth/login` |
+| Admin UI | `http://localhost:9082` |
+| API (login) | `http://localhost:3010/admin/auth/login` |
 
 `NEXT_PUBLIC_API_URL` in `infra/environments/dev/admin.env` must point at the **API** host, not the admin UI host.
 
