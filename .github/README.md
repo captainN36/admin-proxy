@@ -12,6 +12,14 @@
 | `workflow_dispatch` | develop / production |
 | `repository_dispatch` | `admin-develop`, `admin-production` |
 
+## Deploy flow (defaults)
+
+1. Pull **admin** + **infra** (`main`) on server  
+2. `make build ENV=dev SERVICE=admin`  
+3. `make deploy-admin ENV=dev` — recreate admin + nginx
+
+Requires **api** already healthy for admin login.
+
 ## Server paths (example)
 
 | Variable | Example |
@@ -19,23 +27,24 @@
 | `DEV_SOURCE_DIR` | `/home/via-marketplace/admin` |
 | `DEV_INFRA_DIR` | `/home/via-marketplace/infra` |
 | `DEV_INFRA_GIT_REF` | `main` |
-
-## Deploy defaults (in `workflows/ci.yml`)
-
-| Step | Default |
-|------|---------|
-| Build | `make build ENV=dev SERVICE=admin` |
-| Deploy | `make up-nobuild ENV=dev ARGS=admin` |
-
-Requires `up-nobuild` in infra `Makefile` on branch `main`. First full stack: `cd infra && make up-dev`.
+| `DEV_DEPLOY_TARGET` | `deploy-admin` |
+| `DEV_BUILD_ARGS` | `admin` |
 
 ## URLs (dev)
 
 | App | URL |
 |-----|-----|
-| Admin UI | `http://localhost:9082` |
-| API (login) | `http://localhost:3010/admin/auth/login` |
+| Admin UI | `http://admin-via-marketplace.huy.lat:9081` |
+| Direct admin port | `http://localhost:9082` |
+| API | `http://api-via-marketplace.huy.lat:9081` |
 
-`NEXT_PUBLIC_API_URL` in `infra/environments/dev/admin.env` must point at the **API** host, not the admin UI host.
+`NEXT_PUBLIC_API_URL` in `infra/environments/dev/admin.env` must point at the **API** host (`api-via-marketplace.huy.lat:9081`), not the admin UI.
 
-Override only if needed: `DEV_BUILD_ARGS`, `DEV_DEPLOY_TARGET`, `DEV_DEPLOY_ARGS`.
+## First deploy on a new server
+
+```bash
+cd /home/via-marketplace/infra
+make dev-deploy-dev
+```
+
+Then admin CI can roll `deploy-admin` only.

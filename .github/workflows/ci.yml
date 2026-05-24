@@ -82,8 +82,8 @@ jobs:
           infra_env: dev
           build_target: ${{ vars.DEV_BUILD_TARGET || 'build' }}
           build_args: ${{ vars.DEV_BUILD_ARGS || 'admin' }}
-          deploy_target: ${{ vars.DEV_DEPLOY_TARGET || 'up-nobuild' }}
-          deploy_args: ${{ vars.DEV_DEPLOY_ARGS || 'admin' }}
+          deploy_target: ${{ vars.DEV_DEPLOY_TARGET || 'deploy-admin' }}
+          deploy_args: ${{ vars.DEV_DEPLOY_ARGS || '' }}
           deploy_env_prefix: DEV
       - name: Notify Telegram (DEV)
         if: always()
@@ -155,8 +155,8 @@ jobs:
           infra_env: production
           build_target: ${{ vars.PROD_BUILD_TARGET || 'build' }}
           build_args: ${{ vars.PROD_BUILD_ARGS || 'admin' }}
-          deploy_target: ${{ vars.PROD_DEPLOY_TARGET || 'up-nobuild' }}
-          deploy_args: ${{ vars.PROD_DEPLOY_ARGS || 'admin' }}
+          deploy_target: ${{ vars.PROD_DEPLOY_TARGET || 'deploy-admin' }}
+          deploy_args: ${{ vars.PROD_DEPLOY_ARGS || '' }}
           deploy_env_prefix: PROD
       - name: Notify Telegram (PROD)
         if: always()

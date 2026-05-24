@@ -20,7 +20,7 @@ COPY . .
 # Browser: admin :9082, API :3010. Server-side calls use API_URL below (compose network).
 ARG NEXT_PUBLIC_APP_SLUG=via-marketplace-admin
 ARG NEXT_PUBLIC_APP_NAME=Via Marketplace Admin
-ARG NEXT_PUBLIC_API_URL=http://localhost:3010
+ARG NEXT_PUBLIC_API_URL=http://api-via-marketplace.huy.lat:9081
 ARG NEXT_PUBLIC_BASE_PATH=
 
 ENV NEXT_PUBLIC_APP_SLUG=${NEXT_PUBLIC_APP_SLUG}
